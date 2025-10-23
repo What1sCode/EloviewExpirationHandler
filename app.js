@@ -1,4 +1,4 @@
-console.log('🚀 Starting Zendesk EV Cancellation Handler...');
+console.log('🚀 Starting Zendesk EV Expiration Handler...');
 console.log('Node version:', process.version);
 console.log('Environment:', process.env.NODE_ENV);
 console.log('Port:', process.env.PORT);
