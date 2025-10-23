@@ -13,8 +13,8 @@ console.log('✅ All modules loaded successfully');
 // Configuration
 const ZENDESK_DOMAIN = 'https://elotouchcare.zendesk.com';
 const API_TOKEN = 'AItwPQ8Jdd5pVqaX9ZQYzoxRlf8SCr0ha3FK9AhX';
-const TARGET_TAG = 'ev_cancellation';
-const TARGET_SUBJECT = 'Customer cancelled subscription';
+const TARGET_TAG = 'ev_message_expire';
+const TARGET_SUBJECT = 'Customer subscription expired';
 const MACRO_ID = '35840245831575'; // Expiration MACRO - NOT THE WELCOME MACRO!
 const TARGET_GROUP_ID = '31112854673047'; // TS - NA/LATAM group ID
 
