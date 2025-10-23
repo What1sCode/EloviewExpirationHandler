@@ -254,7 +254,7 @@ async function closeTicket(ticketId) {
       ticket: {
         status: 'closed', // Use 'closed' instead of 'solved' to prevent reopening
         comment: {
-          body: 'EV Cancellation email sent. This ticket has been solved and closed.',
+          body: 'EV Expiration email sent. This ticket has been solved and closed.',
           public: false
         }
       }
