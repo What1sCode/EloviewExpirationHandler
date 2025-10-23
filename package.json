@@ -1,0 +1,31 @@
+{
+  "name": "zendesk-ev-expiration-handler",
+  "version": "1.0.0",
+  "description": "Zendesk automation for EV Expiration email responses",
+  "main": "app.js",
+  "engines": {
+    "node": "20.x"
+  },
+  "scripts": {
+    "start": "node app.js",
+    "dev": "nodemon app.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "zendesk",
+    "automation",
+    "ev",
+    "expire",
+    "webhook"
+  ],
+  "author": "Roger Rhodes",
+  "license": "ISC",
+  "dependencies": {
+    "express": "^4.18.2",
+    "axios": "^1.6.0",
+    "cheerio": "^1.0.0-rc.12"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  }
+}
