@@ -6,20 +6,83 @@ console.log('Port:', process.env.PORT);
 const express = require('express');
 const axios = require('axios');
 const cheerio = require('cheerio');
+const crypto = require('crypto');
 const app = express();
 
 console.log('✅ All modules loaded successfully');
 
-// Configuration
-const ZENDESK_DOMAIN = 'https://elotouchcare.zendesk.com';
-const API_TOKEN = 'AItwPQ8Jdd5pVqaX9ZQYzoxRlf8SCr0ha3FK9AhX';
+// Configuration - USE ENVIRONMENT VARIABLES
+const ZENDESK_DOMAIN = process.env.ZENDESK_DOMAIN || 'https://elotouchcare.zendesk.com';
+const API_TOKEN = process.env.ZENDESK_API_TOKEN;
+const ZENDESK_EMAIL = process.env.ZENDESK_EMAIL;
+const WEBHOOK_SECRET = process.env.ZENDESKEVM_WEBHOOK_SECRET;
+const ADMIN_SECRET = process.env.ADMIN_SECRET;
 const TARGET_TAG = 'ev_message_expire';
+const PROCESSED_TAG = 'ev_expire_processed';
 const TARGET_SUBJECT = 'Customer subscription expired';
-const MACRO_ID = '35840245831575'; // Expiration MACRO - NOT THE WELCOME MACRO!
-const TARGET_GROUP_ID = '31112854673047'; // TS - NA/LATAM group ID
+const MACRO_ID = process.env.MACRO_ID || '35840245831575'; // Expiration MACRO - NOT THE WELCOME MACRO!
+const TARGET_GROUP_ID = process.env.TARGET_GROUP_ID || '31112854673047'; // TS - NA/LATAM group ID
 
-// Zendesk admin email for Basic Auth
-const ZENDESK_EMAIL = 'roger.rhodes@elotouch.com';
+// Validate required environment variables on startup
+const requiredEnvVars = {
+  ZENDESK_API_TOKEN: API_TOKEN,
+  ZENDESK_EMAIL: ZENDESK_EMAIL,
+  ZENDESKEVM_WEBHOOK_SECRET: WEBHOOK_SECRET,
+  ADMIN_SECRET: ADMIN_SECRET
+};
+const missingVars = Object.entries(requiredEnvVars).filter(([, v]) => !v).map(([k]) => k);
+if (missingVars.length > 0) {
+  console.error('❌ FATAL: Missing required environment variables!');
+  missingVars.forEach(v => console.error(`   - ${v}: [MISSING]`));
+  process.exit(1);
+}
+
+// In-memory cache to prevent duplicate processing within short time windows
+const recentlyProcessed = new Map();
+const PROCESSING_COOLDOWN_MS = 60000; // 1 minute cooldown
+
+// Clean up old entries every 5 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [ticketId, timestamp] of recentlyProcessed.entries()) {
+    if (now - timestamp > PROCESSING_COOLDOWN_MS) {
+      recentlyProcessed.delete(ticketId);
+    }
+  }
+}, 300000);
+
+// Webhook signature verification middleware
+function verifyZendeskSignature(req, res, next) {
+  const signature = req.headers['x-zendesk-webhook-signature'];
+  const timestamp = req.headers['x-zendesk-webhook-signature-timestamp'];
+
+  if (!signature || !timestamp) {
+    console.warn('Webhook rejected: missing signature headers');
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  const payload = timestamp + JSON.stringify(req.body);
+  const expected = crypto
+    .createHmac('sha256', WEBHOOK_SECRET)
+    .update(payload)
+    .digest('base64');
+
+  if (!crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) {
+    console.warn('Webhook rejected: invalid signature');
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  next();
+}
+
+// Admin endpoint auth middleware
+function verifyAdminSecret(req, res, next) {
+  const provided = req.headers['x-admin-secret'];
+  if (!provided || !crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(ADMIN_SECRET))) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  next();
+}
 
 // Middleware
 app.use(express.json());
@@ -199,12 +262,12 @@ async function createUser(contactInfo) {
     console.log('Attempting to create user with data:', JSON.stringify(userData, null, 2));
 
     const response = await axios.post(
-      `${ZENDESK_DOMAIN}/api/v2/users.json`,
+      `${ZENDESK_DOMAIN}/api/v2/users/create_or_update.json`,
       userData,
       { headers: getZendeskHeaders() }
     );
 
-    console.log('Created user:', response.data.user.id);
+    console.log('Created/updated user:', response.data.user.id);
     return response.data.user;
   } catch (error) {
     console.error('Error creating user - Status:', error.response?.status);
@@ -221,7 +284,8 @@ async function updateTicketRequestor(ticketId, userId) {
       ticket: {
         requester_id: userId,
         assignee_id: null, // Remove individual assignee
-        group_id: 31112854673047, // Assign to "Elo Technical Support" group
+        group_id: parseInt(TARGET_GROUP_ID), // Assign to "Elo Technical Support" group
+        additional_tags: [PROCESSED_TAG],
         comment: {
           body: 'Contact information processed and user assigned automatically for cancellation response.',
           public: false
@@ -423,13 +487,25 @@ async function processTicket(ticketId) {
   try {
     console.log(`Processing cancellation ticket ${ticketId}`);
 
+    // Check in-memory cache first (fast check for rapid duplicate webhooks)
+    if (recentlyProcessed.has(ticketId)) {
+      console.log(`Ticket ${ticketId} was recently processed, skipping (in-memory cache)`);
+      return { success: false, reason: 'Recently processed (cooldown)' };
+    }
+
     // Get ticket details
     const ticket = await getTicketDetails(ticketId);
-    
+
     // Check if ticket has the target tag
     if (!ticket.tags.includes(TARGET_TAG)) {
       console.log(`Ticket ${ticketId} doesn't have ${TARGET_TAG} tag, skipping`);
       return { success: false, reason: 'Missing target tag' };
+    }
+
+    // Check if already processed
+    if (ticket.tags.includes(PROCESSED_TAG)) {
+      console.log(`Ticket ${ticketId} already has ${PROCESSED_TAG} tag, skipping`);
+      return { success: false, reason: 'Already processed' };
     }
 
     // Check if ticket has the target subject
@@ -440,6 +516,9 @@ async function processTicket(ticketId) {
     }
 
     console.log(`✅ Ticket ${ticketId} matches criteria - Tag: ${TARGET_TAG}, Subject contains: "${TARGET_SUBJECT}"`);
+
+    // Mark as being processed in memory cache
+    recentlyProcessed.set(ticketId, Date.now());
 
     // Extract contact information from ticket description and comments
     let ticketContent = ticket.description || '';
@@ -513,18 +592,19 @@ async function processTicket(ticketId) {
 }
 
 // Webhook endpoint for Zendesk
-app.post('/webhook/zendesk', async (req, res) => {
+app.post('/webhook/zendesk', verifyZendeskSignature, async (req, res) => {
   try {
     console.log('Received webhook:', JSON.stringify(req.body, null, 2));
 
-    const ticketId = req.body.ticket?.id;
-    
-    if (!ticketId) {
-      return res.status(400).json({ error: 'No ticket ID provided' });
+    const rawId = req.body.ticket?.id;
+    const ticketId = parseInt(rawId, 10);
+
+    if (!rawId || isNaN(ticketId) || ticketId <= 0) {
+      return res.status(400).json({ error: 'Invalid or missing ticket ID' });
     }
 
     const result = await processTicket(ticketId);
-    
+
     res.json({
       success: result.success,
       ticketId: ticketId,
@@ -533,16 +613,21 @@ app.post('/webhook/zendesk', async (req, res) => {
 
   } catch (error) {
     console.error('Webhook error:', error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
-// Manual processing endpoint (for testing)
-app.post('/process-ticket/:ticketId', async (req, res) => {
+// Manual processing endpoint (admin only)
+app.post('/process-ticket/:ticketId', verifyAdminSecret, async (req, res) => {
   try {
-    const ticketId = req.params.ticketId;
+    const ticketId = parseInt(req.params.ticketId, 10);
+
+    if (isNaN(ticketId) || ticketId <= 0) {
+      return res.status(400).json({ error: 'Invalid ticket ID' });
+    }
+
     const result = await processTicket(ticketId);
-    
+
     res.json({
       success: result.success,
       ticketId: ticketId,
@@ -551,21 +636,26 @@ app.post('/process-ticket/:ticketId', async (req, res) => {
 
   } catch (error) {
     console.error('Manual processing error:', error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
-// Test macro endpoint - shows macro details and actions
-app.get('/test-macro/:macroId', async (req, res) => {
+// Test macro endpoint (admin only)
+app.get('/test-macro/:macroId', verifyAdminSecret, async (req, res) => {
   try {
-    const macroId = req.params.macroId;
+    const macroId = parseInt(req.params.macroId, 10);
+
+    if (isNaN(macroId) || macroId <= 0) {
+      return res.status(400).json({ error: 'Invalid macro ID' });
+    }
+
     const response = await axios.get(
       `${ZENDESK_DOMAIN}/api/v2/macros/${macroId}.json`,
       { headers: getZendeskHeaders() }
     );
-    
+
     const macro = response.data.macro;
-    
+
     res.json({
       success: true,
       macro: {
@@ -577,20 +667,16 @@ app.get('/test-macro/:macroId', async (req, res) => {
       }
     });
   } catch (error) {
-    res.status(500).json({ 
-      success: false,
-      error: error.response?.data || error.message 
-    });
+    console.error('Test macro error:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
 
 // Health check endpoint
 app.get('/health', (req, res) => {
-  res.json({ 
-    status: 'healthy', 
-    timestamp: new Date().toISOString(),
-    zendesk_domain: ZENDESK_DOMAIN,
-    type: 'EV Cancellation Handler'
+  res.json({
+    status: 'healthy',
+    timestamp: new Date().toISOString()
   });
 });
 
