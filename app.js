@@ -15,7 +15,7 @@ console.log('✅ All modules loaded successfully');
 const ZENDESK_DOMAIN = process.env.ZENDESK_DOMAIN || 'https://elotouchcare.zendesk.com';
 const API_TOKEN = process.env.ZENDESK_API_TOKEN;
 const ZENDESK_EMAIL = process.env.ZENDESK_EMAIL;
-const WEBHOOK_SECRET = process.env.ZENDESKEVM_WEBHOOK_SECRET;
+const WEBHOOK_SECRET = process.env.ZENDESKEVExp_WEBHOOK_SECRET;
 const ADMIN_SECRET = process.env.ADMIN_SECRET;
 const TARGET_TAG = 'ev_message_expire';
 const PROCESSED_TAG = 'ev_expire_processed';
@@ -27,7 +27,7 @@ const TARGET_GROUP_ID = process.env.TARGET_GROUP_ID || '31112854673047'; // TS -
 const requiredEnvVars = {
   ZENDESK_API_TOKEN: API_TOKEN,
   ZENDESK_EMAIL: ZENDESK_EMAIL,
-  ZENDESKEVM_WEBHOOK_SECRET: WEBHOOK_SECRET,
+  ZENDESKEVExp_WEBHOOK_SECRET: WEBHOOK_SECRET,
   ADMIN_SECRET: ADMIN_SECRET
 };
 const missingVars = Object.entries(requiredEnvVars).filter(([, v]) => !v).map(([k]) => k);
